@@ -1,0 +1,9 @@
+ipykernel
+pandas
+torch
+datasets
+transformers
+sentence-transformers
+nltk
+gensim
+xgboost
