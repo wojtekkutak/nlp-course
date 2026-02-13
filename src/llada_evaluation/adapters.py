@@ -10,6 +10,7 @@ Institution: Warsaw University of Technology, NLP Course Winter 2025
 
 import sys
 import os
+import torch
 from pathlib import Path
 from typing import Optional, List
 import logging
@@ -109,6 +110,9 @@ class LLaDAEvaluator(LSBEvaluator):
         self.judge_model_name = judge_model_name
         self.device = inference_wrapper.device
 
+        # Provide access to the model for LSBEvaluator methods (embeddings, etc.)
+        self.model = inference_wrapper.model
+
         # Set up configuration
         if config is not None:
             if not isinstance(config, EvaluationConfig):
@@ -144,6 +148,44 @@ class LLaDAEvaluator(LSBEvaluator):
         # Initialize attributes needed by LSBEvaluator methods
         self._embedding_cache = {}
         self._use_semantic_detection = True
+
+        # Load judge model if provided
+        self.judge_model = None
+        self.judge_tokenizer = None
+        if judge_model_name:
+            self.logger.info(f"Loading judge model: {judge_model_name}")
+            from transformers import AutoTokenizer, AutoModelForCausalLM
+
+            self.judge_tokenizer = AutoTokenizer.from_pretrained(
+                judge_model_name,
+                trust_remote_code=True
+            )
+
+            # Set pad token if not present
+            if self.judge_tokenizer.pad_token is None:
+                self.judge_tokenizer.pad_token = self.judge_tokenizer.eos_token
+
+            # Load judge model with efficient device handling
+            if str(self.device) == "cuda":
+                self.judge_model = AutoModelForCausalLM.from_pretrained(
+                    judge_model_name,
+                    torch_dtype=torch.float16,
+                    device_map="auto",
+                    trust_remote_code=True
+                )
+            else:
+                self.judge_model = AutoModelForCausalLM.from_pretrained(
+                    judge_model_name,
+                    torch_dtype=torch.float16 if str(self.device) == "mps" else torch.float32,
+                    device_map=None,
+                    trust_remote_code=True
+                )
+                self.judge_model = self.judge_model.to(self.device)
+
+            self.judge_model.eval()
+            self.logger.info("Judge model loaded successfully!")
+        else:
+            self.logger.warning("No judge model specified. Using same model for evaluation (not recommended).")
 
     def generate_response(self, formatted_prompt: str) -> str:
         """

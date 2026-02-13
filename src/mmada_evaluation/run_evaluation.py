@@ -27,6 +27,13 @@ if VERSION != REQUIRED_VERSION:
     sys.exit(1)
 
 from adapters import create_mmada_evaluator
+from reproducibility import (
+    set_seed,
+    check_reproducibility,
+    create_run_config,
+    save_config,
+    get_environment_info
+)
 
 # Setup paths
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
@@ -64,10 +71,11 @@ def main():
     parser.add_argument("--gen-length", type=int, default=128)
     parser.add_argument("--block-length", type=int, default=32)
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility (recommended)")
+    parser.add_argument("--strict-deterministic", action="store_true", help="Enable STRICT deterministic algorithms (VERY SLOW - not recommended)")
     parser.add_argument("--judge", default=None, help="Judge model (e.g., Qwen/Qwen2.5-3B-Instruct)")
     parser.add_argument("--domains", nargs="+", choices=["health", "misinformation", "disinformation"], default=None)
     parser.add_argument("--output", default=None)
-    parser.add_argument("--checkpoint-interval", type=int, default=50)
     parser.add_argument("--log-level", default="INFO")
 
     args = parser.parse_args()
@@ -99,10 +107,20 @@ def main():
     logger.info(f"Steps: {args.steps}")
     logger.info(f"Generation length: {args.gen_length}")
     logger.info(f"Block length: {args.block_length}")
+    logger.info(f"Temperature: {args.temperature}")
+    logger.info(f"Seed: {args.seed if args.seed is not None else 'Not set (not reproducible)'}")
+    logger.info(f"Strict deterministic: {args.strict_deterministic}")
     logger.info(f"Judge: {args.judge or 'None'}")
     logger.info(f"Domains: {args.domains or 'All'}")
     logger.info(f"Output: {output_dir}")
     logger.info("="*70)
+
+    # Set random seed for reproducibility
+    if args.seed is not None:
+        set_seed(args.seed, use_deterministic_algorithms=args.strict_deterministic)
+
+    # Check reproducibility settings
+    check_reproducibility(temperature=args.temperature, seed=args.seed)
 
     try:
         # Create evaluator
@@ -123,17 +141,32 @@ def main():
         prompt_files = get_prompt_files(args.domains)
         logger.info(f"Evaluating {len(prompt_files)} domains")
 
+        # Save run configuration for reproducibility
+        run_config = create_run_config(
+            model_name=args.model_path,
+            model_type="mmada",
+            device=evaluator.device,
+            steps=args.steps,
+            gen_length=args.gen_length,
+            block_length=args.block_length,
+            temperature=args.temperature,
+            seed=args.seed,
+            judge_model=args.judge,
+            domains=args.domains or ["health", "misinformation", "disinformation"]
+        )
+        save_config(run_config, output_dir / "config.json")
+
         # Run evaluation
         logger.info("Starting evaluation...")
         evaluator.run_evaluation(
             prompts_files=[str(f) for f in prompt_files],
-            output_dir=str(output_dir),
-            checkpoint_interval=args.checkpoint_interval
+            output_dir=str(output_dir)
         )
 
         logger.info("="*70)
         logger.info("Evaluation Complete!")
         logger.info(f"Results: {output_dir}")
+        logger.info(f"Configuration: {output_dir / 'config.json'}")
         logger.info("="*70)
 
         return 0
