@@ -1,9 +1,8 @@
 """
-LLaDA (Large Language Diffusion with mAsking) Inference Wrapper
+MMaDA (Multimodal Large Diffusion Language Model) Inference Wrapper
 
-Provides a clean interface for generating text using LLaDA-8B-Instruct model.
-This wrapper handles model loading, prompt formatting, and generation with
-configurable diffusion parameters.
+Provides a clean interface for text generation using MMaDA-8B-MixCoT model.
+This wrapper focuses on text-only generation using the multimodal diffusion model.
 
 Authors: Based on work by Kisiel, Kosakowski, Franczak, and Koniecko
 Institution: Warsaw University of Technology, NLP Course Winter 2025
@@ -17,64 +16,64 @@ import time
 
 import torch
 import numpy as np
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer
 import transformers
 
 # Version compatibility check
-TRANSFORMERS_REQUIRED_VERSION = "4.38.2"
+# MMaDA requires transformers==4.46.0
+TRANSFORMERS_REQUIRED_VERSION = "4.46.0"
 if transformers.__version__ != TRANSFORMERS_REQUIRED_VERSION:
     import warnings
     warnings.warn(
-        f"LLaDA requires transformers=={TRANSFORMERS_REQUIRED_VERSION} but found {transformers.__version__}. "
-        f"This may cause compatibility issues. Install with: pip install -r src/requirements_llada.txt",
+        f"MMaDA requires transformers=={TRANSFORMERS_REQUIRED_VERSION} but found {transformers.__version__}. "
+        f"This may cause compatibility issues. Install with: pip install -r src/requirements_mmada.txt",
         UserWarning
     )
 
-# Add LLaDA to Python path for importing generate function
-LLADA_PATH = Path(__file__).parent.parent / "LLaDA"
-if LLADA_PATH.exists():
-    sys.path.insert(0, str(LLADA_PATH))
-    from generate import generate
+# Add MMaDA to Python path for importing required modules
+MMADA_PATH = Path(__file__).parent.parent.parent / "MMaDA"
+if MMADA_PATH.exists():
+    sys.path.insert(0, str(MMADA_PATH))
+    # Import MMaDA's model and generation utilities
+    from models import MMadaModelLM
+    from models.modeling_mmada import add_gumbel_noise, get_num_transfer_tokens
 else:
     raise ImportError(
-        f"LLaDA repository not found at {LLADA_PATH}. "
-        "Please ensure LLaDA is cloned in the project root."
+        f"MMaDA repository not found at {MMADA_PATH}. "
+        "Please ensure MMaDA is cloned in the project root."
     )
 
 from utils import setup_logging, validate_device, format_chat_prompt, GenerationStats
 
 
-class LLaDAInference:
+class MMaDAInference:
     """
-    Wrapper for LLaDA-8B-Instruct model inference.
+    Wrapper for MMaDA-8B-MixCoT model inference (text-only).
 
     This class provides a simplified interface for text generation using
-    the LLaDA diffusion language model with configurable parameters.
+    the MMaDA multimodal diffusion model with Chain-of-Thought capabilities.
     """
 
-    # LLaDA-specific constants
+    # MMaDA uses same token IDs as LLaDA (based on same foundation)
     MASK_ID = 126336  # Token ID for [MASK]
     EOS_ID = 126081   # Token ID for EOS
     EOT_ID = 126348   # Token ID for EoT (End of Turn)
 
     def __init__(
         self,
-        model_path: str = "GSAI-ML/LLaDA-8B-Instruct",
+        model_path: str = "Gen-Verse/MMaDA-8B-MixCoT",
         device: Optional[str] = None,
         steps: int = 128,
         gen_length: int = 128,
         block_length: int = 32,
         temperature: float = 0.0,
-        cfg_scale: float = 0.0,
         remasking: str = "low_confidence",
-        logits_eos_inf: bool = False,
-        confidence_eos_eot_inf: bool = False,
         dtype: torch.dtype = torch.bfloat16,
         log_level: str = "INFO",
         log_file: Optional[str] = None
     ):
         """
-        Initialize LLaDA inference wrapper.
+        Initialize MMaDA inference wrapper.
 
         Args:
             model_path: HuggingFace model path or local path
@@ -84,15 +83,12 @@ class LLaDAInference:
             block_length: Block size for semi-autoregressive remasking (default: 32)
                          Must divide gen_length evenly
             temperature: Sampling temperature for Gumbel noise (default: 0.0 = greedy)
-            cfg_scale: Classifier-free guidance scale (default: 0.0 = disabled)
             remasking: Remasking strategy ('low_confidence' or 'random')
-            logits_eos_inf: Set EOS logits to -inf (prevents early stopping)
-            confidence_eos_eot_inf: Set EOS/EoT confidence to -inf
             dtype: Model data type (default: bfloat16)
             log_level: Logging level
             log_file: Optional log file path
         """
-        self.logger = setup_logging(log_level, log_file, name="LLaDAInference")
+        self.logger = setup_logging(log_level, log_file, name="MMaDAInference")
 
         # Validate parameters
         self.model_path = model_path
@@ -108,8 +104,6 @@ class LLaDAInference:
             raise ValueError(f"gen_length ({gen_length}) must be divisible by block_length ({block_length})")
         if temperature < 0:
             raise ValueError(f"temperature must be non-negative, got {temperature}")
-        if cfg_scale < 0:
-            raise ValueError(f"cfg_scale must be non-negative, got {cfg_scale}")
         if remasking not in ["low_confidence", "random"]:
             raise ValueError(f"remasking must be 'low_confidence' or 'random', got '{remasking}'")
 
@@ -118,10 +112,7 @@ class LLaDAInference:
         self.gen_length = gen_length
         self.block_length = block_length
         self.temperature = temperature
-        self.cfg_scale = cfg_scale
         self.remasking = remasking
-        self.logits_eos_inf = logits_eos_inf
-        self.confidence_eos_eot_inf = confidence_eos_eot_inf
         self.dtype = dtype
 
         # Statistics tracking
@@ -131,8 +122,8 @@ class LLaDAInference:
         self._load_model()
 
     def _load_model(self):
-        """Load LLaDA model and tokenizer."""
-        self.logger.info(f"Loading LLaDA model: {self.model_path}")
+        """Load MMaDA model and tokenizer."""
+        self.logger.info(f"Loading MMaDA model: {self.model_path}")
         self.logger.info(f"Using device: {self.device}")
         self.logger.info(f"Model dtype: {self.dtype}")
 
@@ -144,8 +135,8 @@ class LLaDAInference:
             )
             self.logger.info("Tokenizer loaded successfully")
 
-            # Load model with trust_remote_code for custom model class
-            self.model = AutoModel.from_pretrained(
+            # Load MMaDA model
+            self.model = MMadaModelLM.from_pretrained(
                 self.model_path,
                 trust_remote_code=True,
                 torch_dtype=self.dtype
@@ -181,7 +172,7 @@ class LLaDAInference:
         add_chat_template: bool = True
     ) -> str:
         """
-        Format prompt for LLaDA model.
+        Format prompt for MMaDA model.
 
         Args:
             prompt: Either a string or list of message dicts with 'role' and 'content'
@@ -206,6 +197,122 @@ class LLaDAInference:
             # Simple concatenation for multi-turn
             return "\n".join([f"{m['role']}: {m['content']}" for m in messages])
 
+    def _generate_diffusion(
+        self,
+        prompt_ids: torch.Tensor,
+        steps: int,
+        gen_length: int,
+        block_length: int,
+        temperature: float
+    ) -> torch.Tensor:
+        """
+        Internal method implementing MMaDA's diffusion generation.
+
+        This is adapted from MMaDA's generate functions but simplified for text-only.
+
+        Args:
+            prompt_ids: Tokenized prompt tensor [1, prompt_len]
+            steps: Sampling steps
+            gen_length: Generation length
+            block_length: Block length for semi-autoregressive
+            temperature: Sampling temperature
+
+        Returns:
+            Generated token IDs [1, prompt_len + gen_length]
+        """
+        # Initialize sequence with prompt + masked tokens
+        x = torch.full(
+            (1, prompt_ids.shape[1] + gen_length),
+            self.MASK_ID,
+            dtype=torch.long,
+            device=self.device
+        )
+        x[:, :prompt_ids.shape[1]] = prompt_ids.clone()
+
+        assert gen_length % block_length == 0
+        num_blocks = gen_length // block_length
+
+        assert steps % num_blocks == 0
+        steps_per_block = steps // num_blocks
+
+        # Process each block
+        for block_idx in range(num_blocks):
+            block_start = prompt_ids.shape[1] + block_idx * block_length
+            block_end = prompt_ids.shape[1] + (block_idx + 1) * block_length
+
+            # Get mask indices for this block
+            block_mask_index = (x[:, block_start:block_end] == self.MASK_ID)
+            num_transfer_tokens = get_num_transfer_tokens(block_mask_index, steps_per_block)
+
+            # Iterative denoising for this block
+            for step_idx in range(steps_per_block):
+                mask_index = (x == self.MASK_ID)
+
+                # Forward pass
+                logits = self.model(x).logits
+
+                # Only unmask within current block
+                mask_index[:, block_end:] = False
+
+                # Get transfer indices based on remasking strategy
+                if self.remasking == "low_confidence":
+                    # Add Gumbel noise for sampling
+                    logits_with_noise = add_gumbel_noise(logits, temperature)
+                    x0 = torch.argmax(logits_with_noise, dim=-1)
+
+                    # Get confidence scores
+                    confidence = logits_with_noise.max(dim=-1).values
+
+                    # Select tokens to transfer (unmask) based on confidence
+                    num_to_transfer = num_transfer_tokens[:, step_idx]
+
+                    # Set non-masked positions to high confidence so they won't be selected
+                    confidence = confidence.masked_fill(~mask_index, float('inf'))
+
+                    # Get indices of lowest confidence (to keep masked)
+                    _, indices = confidence.sort(dim=1)
+
+                    # Create transfer index: unmask all except the lowest confidence ones
+                    transfer_index = torch.zeros_like(mask_index)
+                    for b in range(x.shape[0]):
+                        # Unmask everything except the last num_to_keep tokens
+                        num_to_keep = mask_index[b].sum() - num_to_transfer[b]
+                        if num_to_keep > 0:
+                            keep_indices = indices[b, :num_to_keep]
+                            transfer_mask = torch.ones(x.shape[1], dtype=torch.bool, device=self.device)
+                            transfer_mask[keep_indices] = False
+                            transfer_index[b] = transfer_mask & mask_index[b]
+                        else:
+                            transfer_index[b] = mask_index[b]
+
+                    # Update tokens
+                    x[transfer_index] = x0[transfer_index]
+
+                elif self.remasking == "random":
+                    # Sample from logits with Gumbel noise
+                    logits_with_noise = add_gumbel_noise(logits, temperature)
+                    x0 = torch.argmax(logits_with_noise, dim=-1)
+
+                    # Randomly select tokens to transfer
+                    num_to_transfer = num_transfer_tokens[:, step_idx]
+
+                    transfer_index = torch.zeros_like(mask_index)
+                    for b in range(x.shape[0]):
+                        masked_positions = mask_index[b].nonzero(as_tuple=False).squeeze(-1)
+                        if len(masked_positions) > 0:
+                            num_transfer = min(num_to_transfer[b].item(), len(masked_positions))
+                            if num_transfer > 0:
+                                selected = masked_positions[torch.randperm(len(masked_positions))[:num_transfer]]
+                                transfer_index[b, selected] = True
+
+                    x[transfer_index] = x0[transfer_index]
+
+                # Check if block is complete
+                if (x[:, block_start:block_end] == self.MASK_ID).sum() == 0:
+                    break
+
+        return x
+
     def generate_response(
         self,
         prompt: Union[str, List[dict]],
@@ -213,7 +320,6 @@ class LLaDAInference:
         gen_length: Optional[int] = None,
         block_length: Optional[int] = None,
         temperature: Optional[float] = None,
-        cfg_scale: Optional[float] = None,
         add_chat_template: bool = True,
         remove_eos: bool = True,
         return_tokens: bool = False
@@ -227,7 +333,6 @@ class LLaDAInference:
             gen_length: Override default generation length
             block_length: Override default block length
             temperature: Override default temperature
-            cfg_scale: Override default CFG scale
             add_chat_template: Apply chat template to prompt
             remove_eos: Remove EOS tokens from response
             return_tokens: If True, return (text, token_ids) tuple
@@ -240,7 +345,6 @@ class LLaDAInference:
         gen_length = gen_length if gen_length is not None else self.gen_length
         block_length = block_length if block_length is not None else self.block_length
         temperature = temperature if temperature is not None else self.temperature
-        cfg_scale = cfg_scale if cfg_scale is not None else self.cfg_scale
 
         # Format prompt
         formatted_prompt = self.format_prompt(prompt, add_chat_template)
@@ -256,22 +360,16 @@ class LLaDAInference:
         prompt_length = input_ids.shape[1]
         self.logger.debug(f"Prompt length: {prompt_length} tokens")
 
-        # Generate using LLaDA's diffusion process
+        # Generate using MMaDA's diffusion process
         start_time = time.time()
         try:
             with torch.no_grad():
-                output_ids = generate(
-                    model=self.model,
-                    prompt=input_ids,
+                output_ids = self._generate_diffusion(
+                    prompt_ids=input_ids,
                     steps=steps,
                     gen_length=gen_length,
                     block_length=block_length,
-                    temperature=temperature,
-                    cfg_scale=cfg_scale,
-                    remasking=self.remasking,
-                    mask_id=self.MASK_ID,
-                    logits_eos_inf=self.logits_eos_inf,
-                    confidence_eos_eot_inf=self.confidence_eos_eot_inf
+                    temperature=temperature
                 )
 
             generation_time = time.time() - start_time
@@ -287,7 +385,6 @@ class LLaDAInference:
 
             # Optionally remove EOS tokens manually
             if remove_eos:
-                # Remove any EOS token artifacts that skip_special_tokens might miss
                 response = response.replace(self.tokenizer.eos_token, "").strip()
 
             # Track statistics
@@ -316,8 +413,7 @@ class LLaDAInference:
         """
         Generate responses for multiple prompts.
 
-        Note: LLaDA's current implementation doesn't support true batch inference,
-        so this processes prompts sequentially. Future versions may support batching.
+        Note: Current implementation processes prompts sequentially.
 
         Args:
             prompts: List of prompts (strings or message lists)
@@ -353,18 +449,18 @@ class LLaDAInference:
 
     def __repr__(self) -> str:
         return (
-            f"LLaDAInference(model={self.model_path}, device={self.device}, "
+            f"MMaDAInference(model={self.model_path}, device={self.device}, "
             f"steps={self.steps}, gen_length={self.gen_length}, "
             f"block_length={self.block_length})"
         )
 
 
 def main():
-    """Example usage of LLaDAInference."""
+    """Example usage of MMaDAInference."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="Test LLaDA inference")
-    parser.add_argument("--model", default="GSAI-ML/LLaDA-8B-Instruct", help="Model path")
+    parser = argparse.ArgumentParser(description="Test MMaDA inference")
+    parser.add_argument("--model", default="Gen-Verse/MMaDA-8B-MixCoT", help="Model path")
     parser.add_argument("--device", default=None, help="Device (cuda/mps/cpu)")
     parser.add_argument("--prompt", default="What is the capital of France?", help="Test prompt")
     parser.add_argument("--steps", type=int, default=128, help="Sampling steps")
@@ -374,7 +470,7 @@ def main():
     args = parser.parse_args()
 
     # Initialize inference
-    inference = LLaDAInference(
+    inference = MMaDAInference(
         model_path=args.model,
         device=args.device,
         steps=args.steps,

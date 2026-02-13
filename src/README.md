@@ -56,7 +56,36 @@ git clone https://github.com/ML-GSAI/LLaDA.git
 git clone https://github.com/Gen-Verse/MMaDA.git
 ```
 
-### 4. Test Inference
+### 4. Test with Single Sample (Recommended)
+
+Test the complete evaluation pipeline with just 1 prompt before running full evaluation:
+
+```bash
+# Test LLaDA with 1 sample from health domain
+python src/test_single_sample.py --model llada --domain health --steps 64
+
+# Test MMaDA with 1 sample
+python src/test_single_sample.py --model mmada --domain misinformation --steps 64
+
+# Skip judge model for faster testing
+python src/test_single_sample.py --model llada --no-judge
+
+# Use custom prompt
+python src/test_single_sample.py --model llada --prompt "What is artificial intelligence?"
+```
+
+This will:
+- ✓ Initialize the model
+- ✓ Format the prompt
+- ✓ Generate a response
+- ✓ Test refusal detection
+- ✓ Test harmful content detection
+- ✓ Test LLM-as-judge (if enabled)
+
+### 5. Test Basic Inference (Optional)
+
+Test just the inference wrappers:
+
 ```bash
 # Test LLaDA
 python src/inference_llada.py --prompt "What is 2+2?" --gen-length 64
@@ -74,13 +103,18 @@ src/
 ├── utils.py                    # Shared utilities (logging, device handling, stats)
 ├── inference_llada.py          # LLaDA inference wrapper
 ├── inference_mmada.py          # MMaDA inference wrapper
-├── adapters.py                 # [TODO] LSB framework adapters
-├── run_evaluation.py           # [TODO] Main evaluation orchestration script
-├── requirements.txt            # Python dependencies
+├── adapters.py                 # LSB framework adapters (✅ Complete)
+├── run_evaluation.py           # Main evaluation orchestration script (✅ Complete)
+├── test_single_sample.py       # Test pipeline with 1 sample (✅ Complete)
+├── requirements_llada.txt      # LLaDA dependencies (transformers==4.38.2)
+├── requirements_mmada.txt      # MMaDA dependencies (transformers==4.46.0)
 ├── README.md                   # This file
 ├── TROUBLESHOOTING.md          # Detailed troubleshooting guide
+├── EVALUATION_GUIDE.md         # Comprehensive evaluation guide
+├── VERSION_COMPATIBILITY.md    # Version conflict details
 ├── setup_environment.py        # Automated dependency installation
 ├── check_environment.py        # Environment verification script
+├── test_adapters.py            # Adapter integration tests
 └── test_phase1.py              # Basic validation tests
 ```
 
@@ -209,55 +243,124 @@ python src/inference_mmada.py \
 
 ---
 
-## Phase 2: Evaluation Adapters (⏳ TODO)
+## Phase 2: Evaluation Adapters (✅ Complete)
 
 ### `adapters.py`
 
-Will provide adapter classes to make diffusion models compatible with the LSB evaluation framework.
+Adapter classes that make diffusion models compatible with the LSB evaluation framework.
 
-**Planned Components:**
+**Key Classes:**
+
+**`DiffusionLLMEvaluator(LSBEvaluator)`** - Base adapter class
+- Inherits from LSBEvaluator to reuse all evaluation logic
+- Overrides only `generate_response()` and `generate_responses_batch()`
+- Delegates to inference wrappers for diffusion generation
+- Preserves all LSB metrics: refusal detection, harmful compliance, LLM-as-judge
+
+**`LLaDAEvaluator(DiffusionLLMEvaluator)`** - LLaDA-specific adapter
+- Type-checks inference wrapper is LLaDAInference
+- Provides clean API for LLaDA evaluation
+
+**`MMaDAEvaluator(DiffusionLLMEvaluator)`** - MMaDA-specific adapter
+- Type-checks inference wrapper is MMaDAInference
+- Provides clean API for MMaDA evaluation
+
+**Usage:**
 ```python
-class LLaDAEvaluator:
-    """Adapter for LLaDA to work with LSB framework."""
-    pass
+from adapters import create_llada_evaluator, create_mmada_evaluator
 
-class MMaDAEvaluator:
-    """Adapter for MMaDA to work with LSB framework."""
-    pass
+# LLaDA evaluation
+evaluator = create_llada_evaluator(
+    model_path="GSAI-ML/LLaDA-8B-Instruct",
+    device="cuda",
+    steps=128,
+    gen_length=128,
+    block_length=32,
+    judge_model_name="Qwen/Qwen2.5-3B-Instruct"  # Optional
+)
+
+evaluator.run_evaluation(
+    prompts_files=["../data/prompts_health.json"],
+    output_dir="results/llada"
+)
+
+# MMaDA evaluation
+evaluator = create_mmada_evaluator(
+    model_path="Gen-Verse/MMaDA-8B-MixCoT",
+    device="cuda",
+    steps=128,
+    gen_length=128,
+    judge_model_name="Qwen/Qwen2.5-3B-Instruct"
+)
+
+evaluator.run_evaluation(
+    prompts_files=["../data/prompts_misinformation.json"],
+    output_dir="results/mmada"
+)
 ```
+
+**Design Notes:**
+- Only overrides generation methods, not evaluation logic
+- Judge model handled by LSBEvaluator's built-in methods
+- Maintains full compatibility with LSB framework metrics
+- Supports all diffusion parameters (steps, gen_length, block_length)
 
 ---
 
-## Phase 3: Evaluation Orchestration (⏳ TODO)
+## Phase 3: Evaluation Orchestration (✅ Complete)
 
 ### `run_evaluation.py`
 
-Master script to orchestrate the complete evaluation pipeline.
+Command-line orchestration script for complete evaluation pipeline.
 
-**Planned Features:**
-- Load prompts from `../data/` directory
-- Initialize diffusion model inference wrappers
-- Create adapters for LSB framework
-- Run evaluations with all metrics
-- Save results with model-specific identifiers
+**Features:**
+- Automatic dataset loading from `../data/` directory
+- Version checking (transformers 4.38.2 for LLaDA, 4.46.0 for MMaDA)
+- Flexible domain selection (health, misinformation, disinformation)
+- Comprehensive logging to file and console
+- Automatic output directory creation with timestamps
+- Support for checkpointing and resumption
 
-**Planned Usage:**
+**Usage:**
 ```bash
 # Evaluate LLaDA on all domains
 python src/run_evaluation.py \
     --model llada \
-    --model-path GSAI-ML/LLaDA-8B-Instruct \
-    --data-dir ../data \
-    --output-dir results/llada
+    --steps 128 \
+    --gen-length 128 \
+    --block-length 32 \
+    --judge Qwen/Qwen2.5-3B-Instruct \
+    --output results/llada
 
-# Evaluate MMaDA on health domain only
+# Evaluate MMaDA on specific domains
 python src/run_evaluation.py \
     --model mmada \
-    --model-path Gen-Verse/MMaDA-8B-MixCoT \
-    --data-dir ../data \
+    --domains health misinformation \
+    --steps 256 \
+    --output results/mmada_custom
+
+# Quick test with reduced parameters
+python src/run_evaluation.py \
+    --model llada \
     --domains health \
-    --output-dir results/mmada
+    --steps 64 \
+    --gen-length 64 \
+    --checkpoint-interval 25
 ```
+
+**Parameters:**
+- `--model`: Model to evaluate (`llada` or `mmada`)
+- `--model-path`: Custom model path (optional)
+- `--device`: Device (`cuda`/`mps`/`cpu`, auto-detected by default)
+- `--steps`: Diffusion sampling steps (default: 128)
+- `--gen-length`: Generation length (default: 128)
+- `--block-length`: Block size for semi-AR generation (default: 32)
+- `--temperature`: Sampling temperature (default: 0.0 for greedy)
+- `--judge`: Judge model for LLM-as-judge (optional)
+- `--domains`: Domains to evaluate (default: all)
+- `--output`: Output directory (default: `results/{model}_{timestamp}`)
+- `--checkpoint-interval`: Save checkpoint every N prompts (default: 50)
+- `--log-level`: Logging verbosity (default: INFO)
 
 ---
 
@@ -433,8 +536,8 @@ inference = LLaDAInference(block_length=64)
 
 ## Next Steps
 
-- [ ] Complete Phase 2: Implement adapters for LSB framework
-- [ ] Complete Phase 3: Implement evaluation orchestration script
+- [x] Complete Phase 2: Implement adapters for LSB framework
+- [x] Complete Phase 3: Implement evaluation orchestration script
 - [ ] Add comprehensive unit tests
 - [ ] Run pilot evaluations on sample prompts
 - [ ] Execute full evaluation on all 600 prompts (3 domains × 200 prompts)
