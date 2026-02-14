@@ -94,7 +94,6 @@ class LLaDAInference:
         """
         self.logger = setup_logging(log_level, log_file, name="LLaDAInference")
 
-        # Validate parameters
         self.model_path = model_path
         self.device = validate_device(device)
 
@@ -113,7 +112,6 @@ class LLaDAInference:
         if remasking not in ["low_confidence", "random"]:
             raise ValueError(f"remasking must be 'low_confidence' or 'random', got '{remasking}'")
 
-        # Store generation parameters
         self.steps = steps
         self.gen_length = gen_length
         self.block_length = block_length
@@ -124,10 +122,8 @@ class LLaDAInference:
         self.confidence_eos_eot_inf = confidence_eos_eot_inf
         self.dtype = dtype
 
-        # Statistics tracking
         self.stats = GenerationStats()
 
-        # Load model and tokenizer
         self._load_model()
 
     def _load_model(self):
@@ -137,14 +133,12 @@ class LLaDAInference:
         self.logger.info(f"Model dtype: {self.dtype}")
 
         try:
-            # Load tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(
                 self.model_path,
                 trust_remote_code=True
             )
             self.logger.info("Tokenizer loaded successfully")
 
-            # Load model with trust_remote_code for custom model class
             self.model = AutoModel.from_pretrained(
                 self.model_path,
                 trust_remote_code=True,
@@ -154,7 +148,6 @@ class LLaDAInference:
             self.model.eval()
             self.logger.info("Model loaded successfully")
 
-            # Verify mask token
             if hasattr(self.tokenizer, 'mask_token_id'):
                 if self.tokenizer.mask_token_id != self.MASK_ID:
                     self.logger.warning(
@@ -162,7 +155,6 @@ class LLaDAInference:
                         f"mask_token_id={self.tokenizer.mask_token_id}"
                     )
 
-            # Log memory usage estimate
             if self.device == "cuda" and torch.cuda.is_available():
                 mem_allocated = torch.cuda.memory_allocated(self.device) / (1024**3)
                 mem_reserved = torch.cuda.memory_reserved(self.device) / (1024**3)
@@ -193,7 +185,6 @@ class LLaDAInference:
         if isinstance(prompt, str):
             if not add_chat_template:
                 return prompt
-            # Convert string to messages format
             messages = [{"role": "user", "content": prompt}]
         elif isinstance(prompt, list):
             messages = prompt
@@ -203,7 +194,6 @@ class LLaDAInference:
         if add_chat_template:
             return format_chat_prompt(messages, self.tokenizer, fallback=True)
         else:
-            # Simple concatenation for multi-turn
             return "\n".join([f"{m['role']}: {m['content']}" for m in messages])
 
     def generate_response(
@@ -235,17 +225,14 @@ class LLaDAInference:
         Returns:
             Generated text string, or (text, token_ids) if return_tokens=True
         """
-        # Use instance defaults if not overridden
         steps = steps if steps is not None else self.steps
         gen_length = gen_length if gen_length is not None else self.gen_length
         block_length = block_length if block_length is not None else self.block_length
         temperature = temperature if temperature is not None else self.temperature
         cfg_scale = cfg_scale if cfg_scale is not None else self.cfg_scale
 
-        # Format prompt
         formatted_prompt = self.format_prompt(prompt, add_chat_template)
 
-        # Tokenize
         try:
             input_ids = self.tokenizer(formatted_prompt, return_tensors="pt")['input_ids']
             input_ids = input_ids.to(self.device)
@@ -256,7 +243,6 @@ class LLaDAInference:
         prompt_length = input_ids.shape[1]
         self.logger.debug(f"Prompt length: {prompt_length} tokens")
 
-        # Generate using LLaDA's diffusion process
         start_time = time.time()
         try:
             with torch.no_grad():
@@ -276,21 +262,16 @@ class LLaDAInference:
 
             generation_time = time.time() - start_time
 
-            # Extract only generated tokens (after prompt)
             generated_ids = output_ids[:, prompt_length:]
 
-            # Decode
             response = self.tokenizer.decode(
                 generated_ids[0],
                 skip_special_tokens=True
             ).strip()
 
-            # Optionally remove EOS tokens manually
             if remove_eos:
-                # Remove any EOS token artifacts that skip_special_tokens might miss
                 response = response.replace(self.tokenizer.eos_token, "").strip()
 
-            # Track statistics
             tokens_generated = generated_ids.shape[1]
             self.stats.add_generation(tokens_generated, generation_time)
 

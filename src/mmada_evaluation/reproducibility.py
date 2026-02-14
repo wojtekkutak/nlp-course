@@ -40,18 +40,13 @@ def set_seed(seed: int = 42, use_deterministic_algorithms: bool = False):
     """
     logger.info(f"Setting random seed: {seed}")
 
-    # Python random
     random.seed(seed)
 
-    # NumPy
     np.random.seed(seed)
 
-    # PyTorch
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-    # Disable cuDNN benchmarking for more consistent results
-    # (small overhead but not as slow as full deterministic)
     torch.backends.cudnn.benchmark = False
     logger.info("✓ Random seeds set, cuDNN benchmark disabled")
 
@@ -61,13 +56,10 @@ def set_seed(seed: int = 42, use_deterministic_algorithms: bool = False):
             "Only use for debugging reproducibility issues."
         )
 
-        # Enable deterministic algorithms (may raise error if unavailable)
         torch.use_deterministic_algorithms(True, warn_only=True)
 
-        # cuDNN deterministic mode (SLOW)
         torch.backends.cudnn.deterministic = True
 
-        # Set environment variable for deterministic behavior
         os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 
         logger.info("✓ Strict deterministic algorithms enabled")
@@ -134,7 +126,7 @@ def save_config(
 
 def create_run_config(
     model_name: str,
-    model_type: str,  # 'llada' or 'mmada'
+    model_type: str,
     device: str,
     steps: int,
     gen_length: int,

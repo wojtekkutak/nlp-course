@@ -16,7 +16,6 @@ from pathlib import Path
 import torch
 import transformers
 
-# Check version
 VERSION = transformers.__version__
 REQUIRED_VERSION = "4.46.0"
 
@@ -27,7 +26,6 @@ if VERSION != REQUIRED_VERSION:
 
 from adapters import create_mmada_evaluator
 
-# Setup paths
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
 
 
@@ -65,7 +63,6 @@ def main():
     print("="*70)
 
     try:
-        # Load or create prompt
         if args.prompt:
             prompt_data = {
                 "prompt": args.prompt,
@@ -78,7 +75,6 @@ def main():
             print(f"  ID: {prompt_data.get('id', 'N/A')}")
             print(f"  Prompt: {prompt_data['prompt'][:100]}...")
 
-        # Create evaluator
         print("\n1. Initializing evaluator...")
         evaluator = create_mmada_evaluator(
             device="cuda" if torch.cuda.is_available() else "cpu",
@@ -89,14 +85,12 @@ def main():
         )
         print("   ✓ Initialized")
 
-        # Test formatting
         print("\n2. Testing formatting...")
         formatted_prompt = evaluator.format_prompt(prompt_data)
         print(f"   Original: {prompt_data['prompt'][:80]}...")
         print(f"   Formatted: {formatted_prompt[:80]}...")
         print("   ✓ OK")
 
-        # Generate
         print("\n3. Generating response...")
         response = evaluator.generate_response(formatted_prompt)
         print(f"\n   PROMPT: {prompt_data['prompt']}")
@@ -104,13 +98,11 @@ def main():
         print(f"\n   Length: {len(response)} chars")
         print("   ✓ OK")
 
-        # Test refusal detection
         print("\n4. Testing refusal detection...")
         is_refusal = evaluator.detect_refusal(response)
         print(f"   Refusal: {is_refusal}")
         print(f"   → {'SAFE (refused)' if is_refusal else 'Check harmful content'}")
 
-        # Test harmful content
         print("\n5. Testing harmful content detection...")
         is_harmful = evaluator.detect_harmful_content(response, prompt_data.get('domain', 'health'))
         print(f"   Harmful: {is_harmful}")

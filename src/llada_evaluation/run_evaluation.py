@@ -15,13 +15,14 @@ from datetime import datetime
 import logging
 import torch
 import transformers
+import traceback
 
 # Check version
 VERSION = transformers.__version__
 REQUIRED_VERSION = "4.38.2"
 
 if VERSION != REQUIRED_VERSION:
-    print(f"\n❌ ERROR: LLaDA requires transformers=={REQUIRED_VERSION}")
+    print(f"\nERROR: LLaDA requires transformers=={REQUIRED_VERSION}")
     print(f"   Current version: {VERSION}")
     print(f"\n   To fix: pip install -r requirements.txt")
     sys.exit(1)
@@ -80,14 +81,12 @@ def main():
 
     args = parser.parse_args()
 
-    # Set output directory
     if args.output is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         args.output = str(RESULTS_DIR / f"llada_{timestamp}")
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Setup logging
     log_file = output_dir / f"evaluation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper()),
@@ -115,11 +114,9 @@ def main():
     logger.info(f"Output: {output_dir}")
     logger.info("="*70)
 
-    # Set random seed for reproducibility
     if args.seed is not None:
         set_seed(args.seed, use_deterministic_algorithms=args.strict_deterministic)
 
-    # Check reproducibility settings
     check_reproducibility(temperature=args.temperature, seed=args.seed)
 
     try:
@@ -135,13 +132,11 @@ def main():
             judge_model_name=args.judge,
             log_level=args.log_level
         )
-        logger.info("✓ Evaluator initialized")
+        logger.info("Evaluator initialized")
 
-        # Get prompt files
         prompt_files = get_prompt_files(args.domains)
         logger.info(f"Evaluating {len(prompt_files)} domains")
 
-        # Save run configuration for reproducibility
         run_config = create_run_config(
             model_name=args.model_path,
             model_type="llada",
@@ -156,7 +151,6 @@ def main():
         )
         save_config(run_config, output_dir / "config.json")
 
-        # Run evaluation
         logger.info("Starting evaluation...")
         evaluator.run_evaluation(
             prompts_files=[str(f) for f in prompt_files],
@@ -173,7 +167,6 @@ def main():
 
     except Exception as e:
         logger.error(f"Evaluation failed: {type(e).__name__}: {str(e)}")
-        import traceback
         logger.error(traceback.format_exc())
         return 1
 

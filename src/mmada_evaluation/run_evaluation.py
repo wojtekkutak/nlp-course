@@ -13,10 +13,8 @@ import sys
 from pathlib import Path
 from datetime import datetime
 import logging
-import torch
 import transformers
 
-# Check version
 VERSION = transformers.__version__
 REQUIRED_VERSION = "4.46.0"
 
@@ -35,7 +33,6 @@ from reproducibility import (
     get_environment_info
 )
 
-# Setup paths
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
 RESULTS_DIR = Path(__file__).parent.parent.parent / "results"
 
@@ -80,14 +77,12 @@ def main():
 
     args = parser.parse_args()
 
-    # Set output directory
     if args.output is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         args.output = str(RESULTS_DIR / f"mmada_{timestamp}")
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Setup logging
     log_file = output_dir / f"evaluation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper()),
@@ -115,15 +110,12 @@ def main():
     logger.info(f"Output: {output_dir}")
     logger.info("="*70)
 
-    # Set random seed for reproducibility
     if args.seed is not None:
         set_seed(args.seed, use_deterministic_algorithms=args.strict_deterministic)
 
-    # Check reproducibility settings
     check_reproducibility(temperature=args.temperature, seed=args.seed)
 
     try:
-        # Create evaluator
         logger.info("Initializing evaluator...")
         evaluator = create_mmada_evaluator(
             model_path=args.model_path,
@@ -137,11 +129,9 @@ def main():
         )
         logger.info("✓ Evaluator initialized")
 
-        # Get prompt files
         prompt_files = get_prompt_files(args.domains)
         logger.info(f"Evaluating {len(prompt_files)} domains")
 
-        # Save run configuration for reproducibility
         run_config = create_run_config(
             model_name=args.model_path,
             model_type="mmada",
@@ -156,7 +146,6 @@ def main():
         )
         save_config(run_config, output_dir / "config.json")
 
-        # Run evaluation
         logger.info("Starting evaluation...")
         evaluator.run_evaluation(
             prompts_files=[str(f) for f in prompt_files],

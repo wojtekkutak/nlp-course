@@ -8,7 +8,8 @@ Institution: Warsaw University of Technology, NLP Course Winter 2025
 import logging
 import sys
 from typing import Optional
-from datetime import datetime
+import os
+import torch
 
 
 def setup_logging(
@@ -27,10 +28,8 @@ def setup_logging(
     Returns:
         Configured logger instance
     """
-    # Convert string level to logging constant
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
 
-    # Create formatters
     detailed_formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
@@ -39,24 +38,17 @@ def setup_logging(
         '%(levelname)s - %(message)s'
     )
 
-    # Get logger
     logger = logging.getLogger(name)
     logger.setLevel(numeric_level)
 
-    # Clear existing handlers
     logger.handlers.clear()
 
-    # Console handler (simpler format for user-facing messages)
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(numeric_level)
     console_handler.setFormatter(simple_formatter)
     logger.addHandler(console_handler)
-
-    # File handler (detailed format for debugging)
     if log_file:
         try:
-            import os
-            # Create directory if it doesn't exist
             log_dir = os.path.dirname(log_file)
             if log_dir and not os.path.exists(log_dir):
                 os.makedirs(log_dir, exist_ok=True)
@@ -81,7 +73,6 @@ def validate_device(device: Optional[str]) -> str:
     Returns:
         Valid device string
     """
-    import torch
 
     if device is None:
         if torch.cuda.is_available():
@@ -95,7 +86,6 @@ def validate_device(device: Optional[str]) -> str:
     if device not in ["cuda", "mps", "cpu"]:
         raise ValueError(f"Invalid device '{device}'. Must be 'cuda', 'mps', 'cpu', or None")
 
-    # Validate requested device is available
     if device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA requested but not available")
     if device == "mps" and not torch.backends.mps.is_available():
@@ -131,7 +121,6 @@ def format_chat_prompt(
         if not fallback:
             raise
 
-        # Simple fallback formatting
         formatted_parts = []
         for msg in messages:
             role = msg.get("role", "user").capitalize()

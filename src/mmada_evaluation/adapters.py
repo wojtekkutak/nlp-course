@@ -14,6 +14,7 @@ import torch
 from pathlib import Path
 from typing import Optional, List
 import logging
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 # Add NLP_2025W to path for importing LSBEvaluator
 NLP_2025W_PATH = Path(__file__).parent.parent.parent / "NLP_2025W" / "Kisiel_Kosakowski_Franczak_Koniecko"
@@ -26,7 +27,7 @@ else:
         "Please ensure the repository structure is correct."
     )
 
-# Import our inference wrapper
+
 from inference import MMaDAInference
 from utils import setup_logging
 
@@ -66,7 +67,6 @@ class MMaDAEvaluator(LSBEvaluator):
         prompt_batch_size: int = 100,
         log_level: str = "INFO",
         log_file: Optional[str] = None,
-        # Diffusion-specific parameters (can be overridden per-call)
         steps: Optional[int] = None,
         gen_length: Optional[int] = None,
         block_length: Optional[int] = None,
@@ -92,41 +92,39 @@ class MMaDAEvaluator(LSBEvaluator):
         if not isinstance(inference_wrapper, MMaDAInference):
             raise TypeError(f"inference_wrapper must be MMaDAInference, got {type(inference_wrapper)}")
 
-        # Store the inference wrapper
         self.inference_wrapper = inference_wrapper
 
-        # Store diffusion parameters for overrides
         self.diffusion_params = {
             'steps': steps,
             'gen_length': gen_length,
             'block_length': block_length,
             'temperature': temperature
         }
-        # Remove None values
+
         self.diffusion_params = {k: v for k, v in self.diffusion_params.items() if v is not None}
 
-        # Set up attributes needed by LSBEvaluator
+
         self.model_name = inference_wrapper.model_path
         self.judge_model_name = judge_model_name
         self.device = inference_wrapper.device
 
-        # Provide access to the model for LSBEvaluator methods (embeddings, etc.)
+
         self.model = inference_wrapper.model
 
-        # Set up configuration
+
         if config is not None:
             if not isinstance(config, EvaluationConfig):
                 raise TypeError(f"config must be an EvaluationConfig instance, got {type(config).__name__}")
             self.config = config
         else:
-            # Create default config
+
             self.config = EvaluationConfig(
                 batch_size=batch_size,
                 checkpoint_interval=checkpoint_interval,
                 prompt_batch_size=prompt_batch_size
             )
 
-        # Copy config values to attributes for backward compatibility
+
         self.max_new_tokens = self.config.max_new_tokens
         self.temperature = self.config.temperature
         self.top_p = self.config.top_p
@@ -134,7 +132,7 @@ class MMaDAEvaluator(LSBEvaluator):
         self.checkpoint_interval = self.config.checkpoint_interval
         self.prompt_batch_size = self.config.prompt_batch_size
 
-        # Set up logging
+
         setup_logging(log_level=log_level.upper(), log_file=log_file)
         self.logger = logging.getLogger(self.__class__.__name__)
 
@@ -142,30 +140,29 @@ class MMaDAEvaluator(LSBEvaluator):
         self.logger.info(f"Using device: {self.device}")
         self.logger.info(f"Diffusion parameters: {self.diffusion_params}")
 
-        # Use inference wrapper's tokenizer
+
         self.tokenizer = inference_wrapper.tokenizer
 
-        # Initialize attributes needed by LSBEvaluator methods
+
         self._embedding_cache = {}
         self._use_semantic_detection = True
 
-        # Load judge model if provided
+
         self.judge_model = None
         self.judge_tokenizer = None
         if judge_model_name:
             self.logger.info(f"Loading judge model: {judge_model_name}")
-            from transformers import AutoTokenizer, AutoModelForCausalLM
 
             self.judge_tokenizer = AutoTokenizer.from_pretrained(
                 judge_model_name,
                 trust_remote_code=True
             )
 
-            # Set pad token if not present
+
             if self.judge_tokenizer.pad_token is None:
                 self.judge_tokenizer.pad_token = self.judge_tokenizer.eos_token
 
-            # Load judge model with efficient device handling
+
             if str(self.device) == "cuda":
                 self.judge_model = AutoModelForCausalLM.from_pretrained(
                     judge_model_name,
@@ -201,11 +198,11 @@ class MMaDAEvaluator(LSBEvaluator):
             Generated response string
         """
         try:
-            # Use the inference wrapper's generate_response method
+
             response = self.inference_wrapper.generate_response(
                 prompt=formatted_prompt,
-                add_chat_template=False,  # Already formatted by format_prompt
-                **self.diffusion_params  # Apply any parameter overrides
+                add_chat_template=False,
+                **self.diffusion_params
             )
             return response
         except Exception as e:
@@ -227,7 +224,7 @@ class MMaDAEvaluator(LSBEvaluator):
         """
         return self.inference_wrapper.generate_batch(
             prompts=formatted_prompts,
-            add_chat_template=False,  # Already formatted
+            add_chat_template=False,
             **self.diffusion_params
         )
 

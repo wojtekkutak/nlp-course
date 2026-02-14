@@ -19,8 +19,6 @@ import numpy as np
 from transformers import AutoTokenizer
 import transformers
 
-# Version compatibility check
-# MMaDA requires transformers==4.46.0
 TRANSFORMERS_REQUIRED_VERSION = "4.46.0"
 if transformers.__version__ != TRANSFORMERS_REQUIRED_VERSION:
     import warnings
@@ -30,11 +28,9 @@ if transformers.__version__ != TRANSFORMERS_REQUIRED_VERSION:
         UserWarning
     )
 
-# Add MMaDA to Python path for importing required modules
 MMADA_PATH = Path(__file__).parent.parent.parent / "MMaDA"
 if MMADA_PATH.exists():
     sys.path.insert(0, str(MMADA_PATH))
-    # Import MMaDA's model and generation utilities
     from models import MMadaModelLM
     from models.modeling_mmada import add_gumbel_noise, get_num_transfer_tokens
 else:
@@ -90,7 +86,6 @@ class MMaDAInference:
         """
         self.logger = setup_logging(log_level, log_file, name="MMaDAInference")
 
-        # Validate parameters
         self.model_path = model_path
         self.device = validate_device(device)
 
@@ -107,7 +102,6 @@ class MMaDAInference:
         if remasking not in ["low_confidence", "random"]:
             raise ValueError(f"remasking must be 'low_confidence' or 'random', got '{remasking}'")
 
-        # Store generation parameters
         self.steps = steps
         self.gen_length = gen_length
         self.block_length = block_length
@@ -115,10 +109,8 @@ class MMaDAInference:
         self.remasking = remasking
         self.dtype = dtype
 
-        # Statistics tracking
         self.stats = GenerationStats()
 
-        # Load model and tokenizer
         self._load_model()
 
     def _load_model(self):
@@ -128,14 +120,12 @@ class MMaDAInference:
         self.logger.info(f"Model dtype: {self.dtype}")
 
         try:
-            # Load tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(
                 self.model_path,
                 trust_remote_code=True
             )
             self.logger.info("Tokenizer loaded successfully")
 
-            # Load MMaDA model
             self.model = MMadaModelLM.from_pretrained(
                 self.model_path,
                 trust_remote_code=True,
@@ -145,7 +135,6 @@ class MMaDAInference:
             self.model.eval()
             self.logger.info("Model loaded successfully")
 
-            # Verify mask token
             if hasattr(self.tokenizer, 'mask_token_id'):
                 if self.tokenizer.mask_token_id != self.MASK_ID:
                     self.logger.warning(
@@ -153,7 +142,6 @@ class MMaDAInference:
                         f"mask_token_id={self.tokenizer.mask_token_id}"
                     )
 
-            # Log memory usage estimate
             if self.device == "cuda" and torch.cuda.is_available():
                 mem_allocated = torch.cuda.memory_allocated(self.device) / (1024**3)
                 mem_reserved = torch.cuda.memory_reserved(self.device) / (1024**3)
@@ -184,7 +172,6 @@ class MMaDAInference:
         if isinstance(prompt, str):
             if not add_chat_template:
                 return prompt
-            # Convert string to messages format
             messages = [{"role": "user", "content": prompt}]
         elif isinstance(prompt, list):
             messages = prompt
@@ -194,7 +181,6 @@ class MMaDAInference:
         if add_chat_template:
             return format_chat_prompt(messages, self.tokenizer, fallback=True)
         else:
-            # Simple concatenation for multi-turn
             return "\n".join([f"{m['role']}: {m['content']}" for m in messages])
 
     def _generate_diffusion(
@@ -220,7 +206,6 @@ class MMaDAInference:
         Returns:
             Generated token IDs [1, prompt_len + gen_length]
         """
-        # Initialize sequence with prompt + masked tokens
         x = torch.full(
             (1, prompt_ids.shape[1] + gen_length),
             self.MASK_ID,
@@ -235,47 +220,34 @@ class MMaDAInference:
         assert steps % num_blocks == 0
         steps_per_block = steps // num_blocks
 
-        # Process each block
         for block_idx in range(num_blocks):
             block_start = prompt_ids.shape[1] + block_idx * block_length
             block_end = prompt_ids.shape[1] + (block_idx + 1) * block_length
 
-            # Get mask indices for this block
             block_mask_index = (x[:, block_start:block_end] == self.MASK_ID)
             num_transfer_tokens = get_num_transfer_tokens(block_mask_index, steps_per_block)
 
-            # Iterative denoising for this block
             for step_idx in range(steps_per_block):
                 mask_index = (x == self.MASK_ID)
 
-                # Forward pass
                 logits = self.model(x).logits
 
-                # Only unmask within current block
                 mask_index[:, block_end:] = False
 
-                # Get transfer indices based on remasking strategy
                 if self.remasking == "low_confidence":
-                    # Add Gumbel noise for sampling
                     logits_with_noise = add_gumbel_noise(logits, temperature)
                     x0 = torch.argmax(logits_with_noise, dim=-1)
 
-                    # Get confidence scores
                     confidence = logits_with_noise.max(dim=-1).values
 
-                    # Select tokens to transfer (unmask) based on confidence
                     num_to_transfer = num_transfer_tokens[:, step_idx]
 
-                    # Set non-masked positions to high confidence so they won't be selected
                     confidence = confidence.masked_fill(~mask_index, float('inf'))
 
-                    # Get indices of lowest confidence (to keep masked)
                     _, indices = confidence.sort(dim=1)
 
-                    # Create transfer index: unmask all except the lowest confidence ones
                     transfer_index = torch.zeros_like(mask_index)
                     for b in range(x.shape[0]):
-                        # Unmask everything except the last num_to_keep tokens
                         num_to_keep = mask_index[b].sum() - num_to_transfer[b]
                         if num_to_keep > 0:
                             keep_indices = indices[b, :num_to_keep]
@@ -285,15 +257,12 @@ class MMaDAInference:
                         else:
                             transfer_index[b] = mask_index[b]
 
-                    # Update tokens
                     x[transfer_index] = x0[transfer_index]
 
                 elif self.remasking == "random":
-                    # Sample from logits with Gumbel noise
                     logits_with_noise = add_gumbel_noise(logits, temperature)
                     x0 = torch.argmax(logits_with_noise, dim=-1)
 
-                    # Randomly select tokens to transfer
                     num_to_transfer = num_transfer_tokens[:, step_idx]
 
                     transfer_index = torch.zeros_like(mask_index)
@@ -307,7 +276,6 @@ class MMaDAInference:
 
                     x[transfer_index] = x0[transfer_index]
 
-                # Check if block is complete
                 if (x[:, block_start:block_end] == self.MASK_ID).sum() == 0:
                     break
 
@@ -340,16 +308,13 @@ class MMaDAInference:
         Returns:
             Generated text string, or (text, token_ids) if return_tokens=True
         """
-        # Use instance defaults if not overridden
         steps = steps if steps is not None else self.steps
         gen_length = gen_length if gen_length is not None else self.gen_length
         block_length = block_length if block_length is not None else self.block_length
         temperature = temperature if temperature is not None else self.temperature
 
-        # Format prompt
         formatted_prompt = self.format_prompt(prompt, add_chat_template)
 
-        # Tokenize
         try:
             input_ids = self.tokenizer(formatted_prompt, return_tensors="pt")['input_ids']
             input_ids = input_ids.to(self.device)
@@ -360,7 +325,6 @@ class MMaDAInference:
         prompt_length = input_ids.shape[1]
         self.logger.debug(f"Prompt length: {prompt_length} tokens")
 
-        # Generate using MMaDA's diffusion process
         start_time = time.time()
         try:
             with torch.no_grad():
@@ -374,20 +338,16 @@ class MMaDAInference:
 
             generation_time = time.time() - start_time
 
-            # Extract only generated tokens (after prompt)
             generated_ids = output_ids[:, prompt_length:]
 
-            # Decode
             response = self.tokenizer.decode(
                 generated_ids[0],
                 skip_special_tokens=True
             ).strip()
 
-            # Optionally remove EOS tokens manually
             if remove_eos:
                 response = response.replace(self.tokenizer.eos_token, "").strip()
 
-            # Track statistics
             tokens_generated = generated_ids.shape[1]
             self.stats.add_generation(tokens_generated, generation_time)
 
@@ -469,7 +429,6 @@ def main():
 
     args = parser.parse_args()
 
-    # Initialize inference
     inference = MMaDAInference(
         model_path=args.model,
         device=args.device,
@@ -482,7 +441,6 @@ def main():
     print(f"\nPrompt: {args.prompt}")
     print("-" * 80)
 
-    # Generate response
     response = inference.generate_response(args.prompt)
 
     print(f"Response: {response}")
