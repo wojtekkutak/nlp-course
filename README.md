@@ -242,7 +242,6 @@ cd src/llada_evaluation
 # Test single prompt first
 python test_single_sample.py
 
-# Run full evaluation (600 prompts, ~2-3 hours on T4 GPU)
 python run_evaluation.py \
     --model-name GSAI-ML/LLaDA-8B-Instruct \
     --data-dir ../../data \
@@ -274,7 +273,7 @@ Separate environments prevent dependency conflicts.
 ### Computational Requirements
 
 **Per Model Evaluation:**
-- **Time:** ~2-3 hours (LLaDA: 138 min, MMaDA: 300 min)
+- **Time:** ~2-3 hours (LLaDA: 138 min, MMaDA: 140 min)
 - **GPU:** NVIDIA A100
 - **Memory:** ~10GB RAM for full evaluation
 - **Storage:** ~150MB per evaluation result (JSON + CSV + logs)
